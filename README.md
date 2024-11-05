@@ -9,3 +9,4 @@
     mvn install
 ```
 
+![](https://raw.githubusercontent.com/Mohammadwh/massAssignment/refs/heads/main/statics/demo.gif)
