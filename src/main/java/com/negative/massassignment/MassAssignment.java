@@ -2,122 +2,143 @@ package com.negative.massassignment;
 
 import burp.*;
 import org.json.JSONObject;
-
+import org.json.XML;
 import javax.swing.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.net.URLDecoder;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class MassAssignment implements IBurpExtender, IContextMenuFactory {
-    private IExtensionHelpers helpers;
     private IBurpExtenderCallbacks callbacks;
+    private IExtensionHelpers helpers;
 
     @Override
     public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
         this.callbacks = callbacks;
         this.helpers = callbacks.getHelpers();
 
-        callbacks.setExtensionName("Form-JSON Converter");
+        callbacks.setExtensionName("Mass Assignment");
         callbacks.registerContextMenuFactory(this);
     }
 
     @Override
     public List<JMenuItem> createMenuItems(IContextMenuInvocation invocation) {
-        JMenuItem formToJsonItem = new JMenuItem("Convert Form to JSON");
-        formToJsonItem.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                IHttpRequestResponse[] selectedMessages = invocation.getSelectedMessages();
-                if (selectedMessages != null && selectedMessages.length > 0) {
-                    IHttpRequestResponse message = selectedMessages[0];
-                    IRequestInfo requestInfo = helpers.analyzeRequest(message.getRequest());
-                    String body = new String(message.getRequest()).substring(requestInfo.getBodyOffset());
-                    String jsonBody = FormToJson.convert(body);
+        List<JMenuItem> menuItems = new ArrayList<>();
 
-                    List<String> headers = new ArrayList<>(requestInfo.getHeaders());
-                    headers = updateContentType(headers, "application/json");
+        IHttpRequestResponse[] selectedMessages = invocation.getSelectedMessages();
+        if (selectedMessages == null || selectedMessages.length == 0) {
+            return menuItems;
+        }
 
-                    byte[] newRequest = helpers.buildHttpMessage(headers, jsonBody.getBytes());
-                    message.setRequest(newRequest);
-                }
-            }
-        });
-
-        JMenuItem jsonToFormItem = new JMenuItem("Convert JSON to Form");
-        jsonToFormItem.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                IHttpRequestResponse[] selectedMessages = invocation.getSelectedMessages();
-                if (selectedMessages != null && selectedMessages.length > 0) {
-                    IHttpRequestResponse message = selectedMessages[0];
-                    IRequestInfo requestInfo = helpers.analyzeRequest(message.getRequest());
-                    String body = new String(message.getRequest()).substring(requestInfo.getBodyOffset());
-                    String formBody = JsonToForm.convert(body, true);
+        IHttpRequestResponse message = selectedMessages[0];
+        IRequestInfo requestInfo = helpers.analyzeRequest(message.getRequest());
+        String body = new String(message.getRequest()).substring(requestInfo.getBodyOffset());
 
 
-                    List<String> headers = new ArrayList<>(requestInfo.getHeaders());
-                    headers = updateContentType(headers, "application/x-www-form-urlencoded");
+        String contentType = getContentType(requestInfo);
 
-                    byte[] newRequest = helpers.buildHttpMessage(headers, formBody.getBytes());
-                    message.setRequest(newRequest);
-                }
-            }
-        });
+        if ("application/x-www-form-urlencoded".equalsIgnoreCase(contentType)) {
+            menuItems.add(createMenuItem("Convert Form to JSON", body, this::formToJson, message, "application/json"));
+            menuItems.add(createMenuItem("Convert Form to XML", body, this::formToXml, message, "application/xml"));
+        } else if ("application/json".equalsIgnoreCase(contentType)) {
+            menuItems.add(createMenuItem("Convert JSON to Form", body, this::jsonToForm, message, "application/x-www-form-urlencoded"));
+            menuItems.add(createMenuItem("Convert JSON to XML", body, this::jsonToXml, message, "application/xml"));
+        } else if ("application/xml".equalsIgnoreCase(contentType)) {
+            menuItems.add(createMenuItem("Convert XML to Form", body, this::xmlToForm, message, "application/x-www-form-urlencoded"));
+            menuItems.add(createMenuItem("Convert XML to JSON", body, this::xmlToJson, message, "application/json"));
+        }
 
-        return List.of(formToJsonItem, jsonToFormItem);
+        return menuItems;
     }
 
-    private List<String> updateContentType(List<String> headers, String newContentType) {
-        boolean contentTypeFound = false;
+    private String getContentType(IRequestInfo requestInfo) {
+        for (String header : requestInfo.getHeaders()) {
+            if (header.toLowerCase().startsWith("content-type:")) {
+                return header.split(":")[1].trim();
+            }
+        }
+        return "";
+    }
+
+    private JMenuItem createMenuItem(String label, String body, ConversionFunction function, IHttpRequestResponse message, String newContentType) {
+        JMenuItem menuItem = new JMenuItem(label);
+        menuItem.addActionListener(e -> {
+            try {
+
+                String convertedBody = function.convert(body);
+
+
+                List<String> headers = new ArrayList<>(helpers.analyzeRequest(message.getRequest()).getHeaders());
+                updateContentType(headers, newContentType);
+
+
+                byte[] newRequest = helpers.buildHttpMessage(headers, convertedBody.getBytes(StandardCharsets.UTF_8));
+                message.setRequest(newRequest);
+            } catch (Exception ex) {
+                callbacks.printError("Error: " + ex.getMessage());
+            }
+        });
+        return menuItem;
+    }
+
+    private void updateContentType(List<String> headers, String newContentType) {
+        boolean found = false;
+
+
         for (int i = 0; i < headers.size(); i++) {
             if (headers.get(i).toLowerCase().startsWith("content-type:")) {
                 headers.set(i, "Content-Type: " + newContentType);
-                contentTypeFound = true;
+                found = true;
                 break;
             }
         }
-        if (!contentTypeFound) {
+
+
+        if (!found) {
             headers.add("Content-Type: " + newContentType);
         }
-        return headers;
     }
 
-    public static class FormToJson {
-        public static String convert(String form) {
-            Map<String, String> data = new HashMap<>();
-            String decodedForm = URLDecoder.decode(form, StandardCharsets.UTF_8);
-            for (String pair : decodedForm.split("&")) {
-                String[] keyValue = pair.split("=");
-                data.put(keyValue[0], keyValue.length > 1 ? keyValue[1] : "");
-            }
-            return new JSONObject(data).toString();
+
+    private String formToJson(String body) {
+        JSONObject json = new JSONObject();
+        String decoded = URLDecoder.decode(body, StandardCharsets.UTF_8);
+        for (String pair : decoded.split("&")) {
+            String[] keyValue = pair.split("=");
+            json.put(keyValue[0], keyValue.length > 1 ? keyValue[1] : "");
         }
+        return json.toString();
     }
 
-    public static class JsonToForm {
-        public static String convert(String jsonData, boolean encode) {
-            JSONObject data = new JSONObject(jsonData);
-            StringBuilder query = new StringBuilder();
+    private String formToXml(String body) {
+        return XML.toString(new JSONObject(formToJson(body)));
+    }
 
-            for (String key : data.keySet()) {
-                String value = data.getString(key);
-                if ("true".equals(value)) value = "1";
-                if ("false".equals(value)) value = "0";
-                query.append("&").append(key).append("=").append(value);
-            }
-
-            String result = query.length() > 0 ? query.substring(1) : "";
-            if (encode) {
-                result = URLEncoder.encode(result, StandardCharsets.UTF_8);
-                result = result.replace("%3D", "=").replace("%26", "&");
-            }
-            return result;
+    private String jsonToForm(String body) {
+        JSONObject json = new JSONObject(body);
+        StringBuilder form = new StringBuilder();
+        for (String key : json.keySet()) {
+            form.append(key).append("=").append(json.get(key)).append("&");
         }
+        return form.substring(0, form.length() - 1);
+    }
+
+    private String jsonToXml(String body) {
+        return XML.toString(new JSONObject(body));
+    }
+
+    private String xmlToForm(String body) {
+        JSONObject json = XML.toJSONObject(body);
+        return jsonToForm(json.toString());
+    }
+
+    private String xmlToJson(String body) {
+        return XML.toJSONObject(body).toString();
+    }
+
+    @FunctionalInterface
+    private interface ConversionFunction {
+        String convert(String input);
     }
 }
