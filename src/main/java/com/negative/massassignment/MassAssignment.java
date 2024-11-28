@@ -55,7 +55,8 @@ public class MassAssignment implements IBurpExtender, IContextMenuFactory {
     private String getContentType(IRequestInfo requestInfo) {
         for (String header : requestInfo.getHeaders()) {
             if (header.toLowerCase().startsWith("content-type:")) {
-                return header.split(":")[1].trim();
+                String contentType = header.split(":")[1].trim();
+                return contentType.split(";")[0].trim();
             }
         }
         return "";
